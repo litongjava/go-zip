@@ -4,6 +4,6 @@
 
 启动命令
 ```shell
-go-zip target.zip source
+go-zip -r target.zip source
 ```
 
