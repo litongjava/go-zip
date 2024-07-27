@@ -24,18 +24,20 @@ func main() {
   flag.Parse()
 
   // Check if there are enough parameters
-  if *zipFile == "" || flag.NArg() < 1 {
-    log.Fatalln("Usage: go-zip -r archive.zip directory_or_file")
-  }
+  //if *zipFile == "" && flag.NArg() < 1 {
+  //  log.Fatalln("Usage: go-zip -r archive.zip [-x exclude_pattern] [directory_or_file]")
+  //}
 
   // Get extra non-flag parameters, i.e., directory or file name
-  sourcePath := flag.Arg(0)
-
-  // Output the parsed parameter values for validation
-  log.Printf("Zip File: %s, Exclude Pattern: %s, Source Path: %s\n", *zipFile, *excludeFile, sourcePath)
+  var sourcePath string
+  if flag.NArg() < 1 {
+    sourcePath = "."
+  } else {
+    sourcePath = flag.Arg(0)
+  }
 
   // Set zip file name and directory
-  err := Zip(zipFile, sourcePath, excludeFile)
+  err := Zip(*zipFile, sourcePath, *excludeFile)
   if err != nil {
     fmt.Println(err)
   } else {
@@ -43,8 +45,27 @@ func main() {
   }
 }
 
-func Zip(target *string, sourcePath string, excludeFile *string) error {
-  zipfile, err := os.Create(*target)
+func Zip(target string, sourcePath string, excludeFile string) error {
+
+  if sourcePath == "." {
+    currentDir, err := os.Getwd()
+    if err != nil {
+      return err
+    }
+    sourcePath = currentDir
+    if target == "" {
+      parentDir := filepath.Base(currentDir)
+      target = parentDir + ".zip"
+    }
+  } else if target == "" {
+    parentDir := filepath.Base(filepath.Dir(sourcePath))
+    target = parentDir + ".zip"
+  }
+
+  // Output the parsed parameter values for validation
+  log.Printf("Zip File: %s, Exclude Pattern: %s, Source Path: %s\n", target, excludeFile, sourcePath)
+
+  zipfile, err := os.Create(target)
   if err != nil {
     return err
   }
@@ -58,6 +79,12 @@ func Zip(target *string, sourcePath string, excludeFile *string) error {
     return err
   }
 
+  // Get the absolute path of the zip file to exclude it during the walk
+  absZipFile, err := filepath.Abs(target)
+  if err != nil {
+    return err
+  }
+
   var base string
   if info.IsDir() {
     base = filepath.Base(sourcePath)
@@ -67,6 +94,19 @@ func Zip(target *string, sourcePath string, excludeFile *string) error {
 
   if info.IsDir() {
     err = filepath.Walk(sourcePath, func(path string, info os.FileInfo, err error) error {
+      if err != nil {
+        return err
+      }
+
+      // Skip the zip file itself
+      absPath, err := filepath.Abs(path)
+      if err != nil {
+        return err
+      }
+      if absPath == absZipFile {
+        return nil
+      }
+
       return addFileToZip(archive, path, sourcePath, base, excludeFile, info)
     })
   } else {
@@ -76,7 +116,7 @@ func Zip(target *string, sourcePath string, excludeFile *string) error {
   return err
 }
 
-func addFileToZip(archive *zip.Writer, path, sourcePath, base string, excludeFile *string, info os.FileInfo) error {
+func addFileToZip(archive *zip.Writer, path, sourcePath, base string, excludeFile string, info os.FileInfo) error {
   if info.IsDir() && path == sourcePath {
     return nil
   }
@@ -87,7 +127,8 @@ func addFileToZip(archive *zip.Writer, path, sourcePath, base string, excludeFil
     return err
   }
 
-  if excludeFile != nil && matchExcludeFile(relPath, *excludeFile) {
+  if excludeFile != "" && shouldSkip(strings.Split(excludeFile, " "), relPath) {
+    log.Println("skip:", relPath)
     return nil // Skip files matching the exclude pattern
   }
 
@@ -132,14 +173,32 @@ func addFileToZip(archive *zip.Writer, path, sourcePath, base string, excludeFil
   return err
 }
 
-// matchExcludeFile checks if the filename matches the exclude pattern
-func matchExcludeFile(filename string, pattern string) bool {
-  matched, err := filepath.Match(pattern, filename)
-  if err != nil {
-    log.Printf("Error matching file with pattern: %v", err)
-    return false
+// shouldSkip checks if the filename matches the exclude pattern
+func shouldSkip(patterns []string, path string) bool {
+  for _, pattern := range patterns {
+    // 检查目录本身
+    matched, err := filepath.Match(pattern, filepath.Base(path))
+    if err != nil {
+      log.Fatalf("error matching pattern: %v", err)
+    }
+    if matched {
+      return true
+    }
+
+    // 检查是否在排除的目录中
+    dir := path
+    for dir != "." && dir != "/" {
+      dir = filepath.Dir(dir)
+      matched, err := filepath.Match(pattern, filepath.Base(dir))
+      if err != nil {
+        log.Fatalf("error matching pattern: %v", err)
+      }
+      if matched {
+        return true
+      }
+    }
   }
-  return matched
+  return false
 }
 
 // IsChineseChar checks if the string contains Chinese characters
